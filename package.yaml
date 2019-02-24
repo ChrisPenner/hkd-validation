@@ -27,6 +27,9 @@ dependencies:
 - lens
 - mtl
 - text
+- bifunctors
+- invariant
+- containers
 
 library:
   source-dirs: src

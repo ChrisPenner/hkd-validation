@@ -37,14 +37,12 @@ deriving instance (forall a. Show a => Show (f a)) => Show (User f)
 
 jsonKeys :: User (Const T.Text)
 jsonKeys = User
-  { userId    = "user_id"
-  , country   = "country"
-  , interests = "interests"
-  , age       = "age"
+  { userId    = Const "user_id"
+  , country   = Const "country"
+  , interests = Const "interests"
+  , age       = Const "age"
   }
 
-jsonInstances :: User (Dict FromJSON)
-jsonInstances = bdicts
 
 userFromJson :: User (ReaderT Value Maybe)
 userFromJson = bmapC @FromJSON (atKey . getConst) jsonKeys
@@ -64,4 +62,8 @@ bmapC f = bzipWith withDict bdicts
     withDict :: forall a. Dict c a -> f a -> g a
     withDict d fa = requiringDict (f fa) d
 
+
+
+jsonInstances :: User (Dict FromJSON)
+jsonInstances = bdicts
 

@@ -9,22 +9,34 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DerivingStrategies #-}
 module HKD.Validation where
 
 import Control.Lens
 import Control.Monad.Reader
+import Data.Functor.Compose
 
+import Control.Applicative
+import Control.Arrow
+
+import Data.Bifunctor.Join
 import Data.Aeson
 import Data.Aeson.Lens
 import Data.Barbie
 import Data.Barbie.Constraints
+import Data.Either
+import qualified Data.Map as M
 import qualified Data.Text as T
 import Data.Text.Lens
-import Control.Applicative
-import GHC.Generics (Generic)
+import qualified Control.Category as C
 import Control.Arrow
 
-data User f = User
+import GHC.Generics (Generic)
+
+type User = UserB Identity
+
+data UserB f = UserB
   { userId :: f String
   , country :: f String
   , interests :: f [String]
@@ -33,51 +45,62 @@ data User f = User
              , FunctorB, TraversableB, ProductB, ConstraintsB, ProductBC
              )
 
-deriving instance (forall a. Show a => Show (f a)) => Show (User f)
+deriving instance (forall a. Show a => Show (f a)) => Show (UserB f)
 
 type Error = String
 
-newtype Inv p a = Inv (p a a)
+-- type Validator a = a -> [Error]
+-- newtype Val a = Val (Kleisli (Either [Error]) a a)
 
-type Validation a = Inv (Kleisli (Either [Error])) a
-
-atLeastLength :: (Foldable f, Show (f a)) => Int -> Validation (f a)
+atLeastLength :: (Foldable f, Show (f a)) => Int -> Validator (f a)
 atLeastLength n = predToValidation (\e -> show e <> " must be at least size " <> show n) $ (>=n) . length
 
-lessThanEqLength :: (Foldable f, Show (f a)) => Int -> Validation (f a)
+lessThanEqLength :: (Foldable f, Show (f a)) => Int -> Validator (f a)
 lessThanEqLength n = predToValidation (\e -> show e <> " must be no longer than " <> show n) $ (<=n) . length
 
 
-predToValidation :: (a -> String) -> (a -> Bool) -> Validation a
-predToValidation err f = Inv . Kleisli $ \a ->
+predToValidation :: (a -> String) -> (a -> Bool) -> Validator a
+predToValidation err f = Validator $  \a ->
   if f a
-      then pure a
-      else Left [err a]
+    then []
+    else [err a]
 
-greaterThan :: (Show n, Ord n) => n -> Validation n
+greaterThan :: (Show n, Ord n) => n -> Validator n
 greaterThan n = predToValidation (\e -> show e <> " must be greater than " <> show n) (>n)
 
 
-inList :: (Show e, Eq e) => [e] -> Validation e
+inList :: (Show e, Eq e) => [e] -> Validator e
 inList xs = predToValidation (\e -> show e <> "not found in" <> show xs) (`elem` xs)
 
 countryCodes :: [String]
 countryCodes = ["CA", "US", "DE"]
 
-validations :: User (Inv (Kleisli (Either [Error])))
-validations = User
-  { userId = atLeastLength 3
-  , country = inList countryCodes
-  , interests = lessThanEqLength 2
-  , age = greaterThan 0
+runValidator :: Validator a -> a -> Either [String] a
+runValidator (Validator f) a =
+  case f a of
+    []  -> Right a
+    errs -> Left errs
+
+newtype Validator a = Validator (a -> [String])
+  deriving newtype (Semigroup, Monoid)
+
+validations :: UserB Validator
+validations = UserB
+  { userId =  atLeastLength 3 <> lessThanEqLength 10
+  , country =  inList countryCodes
+  , interests =  lessThanEqLength 2
+  , age =  greaterThan 0
   }
 
-runValidations :: User (Inv (Kleisli (Either [Error])))
-               -> User Identity
-               -> User (Either [Error])
-runValidations = bzipWith runValidation
+runValidations :: UserB Validator
+               -> User
+               -> UserB (Either [Error])
+runValidations = bzipWith runValidator'
   where
-    runValidation (Inv (Kleisli f)) (Identity a) = f a
+    runValidator' v (Identity a) = runValidator v a
+
+validated :: UserB (Either [Error])
+validated = runValidations validations testUser
 
 bmapC :: forall c f g b. (AllB c b, ProductBC b) => (forall a. c a => f a -> g a) -> b f -> b g
 bmapC f = bzipWith withDict bdicts
@@ -85,10 +108,40 @@ bmapC f = bzipWith withDict bdicts
     withDict :: forall a. Dict c a -> f a -> g a
     withDict d fa = requiringDict (f fa) d
 
-testUser :: User Identity
-testUser = User
+testUser :: User
+testUser = UserB
   { userId = pure "a"
-  , country = pure "CA"
+  , country = pure "CasdfA"
   , interests = pure ["dogs"]
   , age = pure 32
   }
+
+userDefaults :: UserB Maybe
+userDefaults = UserB
+  { userId = Nothing
+  , country = pure "US"
+  , interests = pure ["food"]
+  , age = Nothing
+  }
+
+jsonMaybe :: FromJSON a => Value -> Maybe a
+jsonMaybe x = case fromJSON x of
+                Success a -> Just a
+                Error _ -> Nothing
+
+userFieldNames :: UserB (Const String)
+userFieldNames = UserB
+    { userId    = "user_id"
+    , country   = "country"
+    , interests = "interests"
+    , age       = "age"
+    }
+
+userFromMap :: M.Map String Value -> UserB Maybe
+userFromMap m = bmapC @FromJSON lookupVal userFieldNames
+  where
+    lookupVal :: FromJSON a => Const String a -> Maybe a
+    lookupVal (Const k) = M.lookup k m >>= jsonMaybe
+
+printErrors :: UserB (Either [Error]) -> [Error]
+printErrors = bfoldMap (fromLeft [])
