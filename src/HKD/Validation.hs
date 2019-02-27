@@ -1,76 +1,58 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE QuantifiedConstraints #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+
 module HKD.Validation where
 
-import Control.Lens
-import Control.Monad.Reader
-import Data.Functor.Compose
+import           Control.Lens
 
-import Control.Applicative
-import Control.Arrow
+import           Data.Aeson
+import           Data.Barbie
+import           Data.Barbie.Constraints
+import           Data.Either
+import qualified Data.Map                as M
 
-import Data.Bifunctor.Join
-import Data.Aeson
-import Data.Aeson.Lens
-import Data.Barbie
-import Data.Barbie.Constraints
-import Data.Either
-import qualified Data.Map as M
-import qualified Data.Text as T
-import Data.Text.Lens
-import qualified Control.Category as C
-import Control.Arrow
-
-import GHC.Generics (Generic)
+import           GHC.Generics            (Generic)
 
 type User = UserB Identity
 
-data UserB f = UserB
-  { userId :: f String
-  , country :: f String
-  , interests :: f [String]
-  , age :: f Int
-  } deriving ( Generic
-             , FunctorB, TraversableB, ProductB, ConstraintsB, ProductBC
-             )
+data UserB f =
+  UserB { userId    :: f String
+        , country   :: f String
+        , interests :: f [String]
+        , age       :: f Int
+        }
+    deriving (Generic, FunctorB, TraversableB, ProductB, ConstraintsB, ProductBC)
 
 deriving instance (forall a. Show a => Show (f a)) => Show (UserB f)
-
 type Error = String
 
 -- type Validator a = a -> [Error]
 -- newtype Val a = Val (Kleisli (Either [Error]) a a)
-
 atLeastLength :: (Foldable f, Show (f a)) => Int -> Validator (f a)
-atLeastLength n = predToValidation (\e -> show e <> " must be at least size " <> show n) $ (>=n) . length
+atLeastLength n =
+  predToValidation (\e -> show e <> " must be at least size " <> show n)
+  $ (>= n) . length
 
 lessThanEqLength :: (Foldable f, Show (f a)) => Int -> Validator (f a)
-lessThanEqLength n = predToValidation (\e -> show e <> " must be no longer than " <> show n) $ (<=n) . length
-
+lessThanEqLength n =
+  predToValidation (\e -> show e <> " must be no longer than " <> show n)
+  $ (<= n) . length
 
 predToValidation :: (a -> String) -> (a -> Bool) -> Validator a
-predToValidation err f = Validator $  \a ->
-  if f a
-    then []
-    else [err a]
+predToValidation err f =
+  Validator
+  $ \a -> if f a
+      then []
+      else [err a]
 
 greaterThan :: (Show n, Ord n) => n -> Validator n
-greaterThan n = predToValidation (\e -> show e <> " must be greater than " <> show n) (>n)
-
+greaterThan n =
+  predToValidation (\e -> show e <> " must be greater than " <> show n) (> n)
 
 inList :: (Show e, Eq e) => [e] -> Validator e
-inList xs = predToValidation (\e -> show e <> "not found in" <> show xs) (`elem` xs)
+inList xs =
+  predToValidation (\e -> show e <> "not found in" <> show xs) (`elem` xs)
 
 countryCodes :: [String]
 countryCodes = ["CA", "US", "DE"]
@@ -78,23 +60,21 @@ countryCodes = ["CA", "US", "DE"]
 runValidator :: Validator a -> a -> Either [String] a
 runValidator (Validator f) a =
   case f a of
-    []  -> Right a
+    []   -> Right a
     errs -> Left errs
 
 newtype Validator a = Validator (a -> [String])
-  deriving newtype (Semigroup, Monoid)
+    deriving newtype (Semigroup, Monoid)
 
 validations :: UserB Validator
-validations = UserB
-  { userId =  atLeastLength 3 <> lessThanEqLength 10
-  , country =  inList countryCodes
-  , interests =  lessThanEqLength 2
-  , age =  greaterThan 0
-  }
+validations =
+  UserB { userId    = atLeastLength 3 <> lessThanEqLength 10
+        , country   = inList countryCodes
+        , interests = lessThanEqLength 2
+        , age       = greaterThan 0
+        }
 
-runValidations :: UserB Validator
-               -> User
-               -> UserB (Either [Error])
+runValidations :: UserB Validator -> User -> UserB (Either [Error])
 runValidations = bzipWith runValidator'
   where
     runValidator' v (Identity a) = runValidator v a
@@ -102,40 +82,44 @@ runValidations = bzipWith runValidator'
 validated :: UserB (Either [Error])
 validated = runValidations validations testUser
 
-bmapC :: forall c f g b. (AllB c b, ProductBC b) => (forall a. c a => f a -> g a) -> b f -> b g
+bmapC :: forall c f g b.
+      (AllB c b, ProductBC b)
+      => (forall a. c a => f a -> g a)
+      -> b f
+      -> b g
 bmapC f = bzipWith withDict bdicts
   where
     withDict :: forall a. Dict c a -> f a -> g a
     withDict d fa = requiringDict (f fa) d
 
 testUser :: User
-testUser = UserB
-  { userId = pure "a"
-  , country = pure "CasdfA"
-  , interests = pure ["dogs"]
-  , age = pure 32
-  }
+testUser =
+  UserB { userId    = pure "a"
+        , country   = pure "CasdfA"
+        , interests = pure ["dogs"]
+        , age       = pure 32
+        }
 
 userDefaults :: UserB Maybe
-userDefaults = UserB
-  { userId = Nothing
-  , country = pure "US"
-  , interests = pure ["food"]
-  , age = Nothing
-  }
+userDefaults =
+  UserB { userId    = Nothing
+        , country   = pure "US"
+        , interests = pure ["food"]
+        , age       = Nothing
+        }
 
 jsonMaybe :: FromJSON a => Value -> Maybe a
 jsonMaybe x = case fromJSON x of
-                Success a -> Just a
-                Error _ -> Nothing
+  Success a -> Just a
+  Error _   -> Nothing
 
 userFieldNames :: UserB (Const String)
-userFieldNames = UserB
-    { userId    = "user_id"
-    , country   = "country"
-    , interests = "interests"
-    , age       = "age"
-    }
+userFieldNames =
+  UserB { userId    = "user_id"
+        , country   = "country"
+        , interests = "interests"
+        , age       = "age"
+        }
 
 userFromMap :: M.Map String Value -> UserB Maybe
 userFromMap m = bmapC @FromJSON lookupVal userFieldNames

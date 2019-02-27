@@ -1,3 +1,6 @@
+defaults: 
+  local: ./package-defaults.yaml
+
 name:                hkd-validation
 version:             0.1.0.0
 github:              "ChrisPenner/hkd-validation"
