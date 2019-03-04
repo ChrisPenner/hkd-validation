@@ -7,54 +7,28 @@ import           Control.Applicative
 import           Control.Lens
 import           Control.Monad.Reader
 
+import HKD.User
 import           Data.Aeson
 import           Data.Aeson.Lens
 import           Data.Barbie
-import           Data.Barbie.Constraints
+import           Data.ByteString.Lazy
+
 import qualified Data.Text               as T
 
-import           GHC.Generics            (Generic)
 
-data User f =
-  User { userId    :: f String
-       , country   :: f String
-       , interests :: f [String]
-       , age       :: f Int
-       }
-    deriving (Generic, FunctorB, TraversableB, ProductB, ConstraintsB, ProductBC)
-
-deriving instance (forall a. Show a => Show (f a)) => Show (User f)
-
-jsonKeys :: User (Const T.Text)
+jsonKeys :: UserB (Const T.Text)
 jsonKeys =
-  User { userId    = Const "user_id"
-       , country   = Const "country"
-       , interests = Const "interests"
-       , age       = Const "age"
-       }
+  UserB { userId    = Const "user_id"
+        , country   = Const "country"
+        , interests = Const "interests"
+        , age       = Const "age"
+        }
 
-userFromJson :: User (ReaderT Value Maybe)
-userFromJson = bmapC @FromJSON (atKey . getConst) jsonKeys
+userFromJson :: (AllB FromJSON b, TraversableB b, ConstraintsB b) => b (Const T.Text)-> ByteString -> (b Maybe)
+userFromJson jsonKeys' = btraverseC @FromJSON (decoder . getConst) jsonKeys'
   where
-    atKey :: FromJSON a => T.Text -> ReaderT Value Maybe a
-    atKey k =
-      do
-        v <- ask
-        lift (preview (key k) v >>= fromResult . fromJSON)
-
-fromResult :: Result a -> Maybe a
-fromResult (Success a) = Just a
-fromResult _ = Nothing
-
-bmapC :: forall c f g b.
-      (AllB c b, ProductBC b)
-      => (forall a. c a => f a -> g a)
-      -> b f
-      -> b g
-bmapC f = bzipWith withDict bdicts
-  where
-    withDict :: forall a. Dict c a -> f a -> g a
-    withDict d fa = requiringDict (f fa) d
-
-jsonInstances :: User (Dict FromJSON)
-jsonInstances = bdicts
+    decoder :: FromJSON a => T.Text -> ByteString -> (Maybe a)
+    decoder k =
+       decode @Value >=> preview (key k) >=> fromResult . fromJSON
+    fromResult :: Result a -> Maybe a
+    fromResult = preview folded

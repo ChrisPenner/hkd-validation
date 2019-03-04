@@ -6,25 +6,16 @@ module HKD.Validation where
 
 import           Control.Lens
 
-import           Data.Aeson
+import qualified Data.Aeson              as A
 import           Data.Barbie
-import           Data.Barbie.Constraints
 import           Data.Either
+import           Data.Either.Validation
 import qualified Data.Map                as M
+import Data.Bifunctor
+import HKD.Transformer
 
-import           GHC.Generics            (Generic)
+import           HKD.User
 
-type User = UserB Identity
-
-data UserB f =
-  UserB { userId    :: f String
-        , country   :: f String
-        , interests :: f [String]
-        , age       :: f Int
-        }
-    deriving (Generic, FunctorB, TraversableB, ProductB, ConstraintsB, ProductBC)
-
-deriving instance (forall a. Show a => Show (f a)) => Show (UserB f)
 type Error = String
 
 -- type Validator a = a -> [Error]
@@ -57,42 +48,40 @@ inList xs =
 countryCodes :: [String]
 countryCodes = ["CA", "US", "DE"]
 
-runValidator :: Validator a -> a -> Either [String] a
-runValidator (Validator f) a =
+runValidator ::  a -> Validator a -> Validation [Error] a
+runValidator  a (Validator f) =
   case f a of
-    []   -> Right a
-    errs -> Left errs
+    []   -> Success a
+    errs -> Failure errs
 
 newtype Validator a = Validator (a -> [String])
     deriving newtype (Semigroup, Monoid)
 
-validations :: UserB Validator
-validations =
+userValidations :: UserB Validator
+userValidations =
   UserB { userId    = atLeastLength 3 <> lessThanEqLength 10
         , country   = inList countryCodes
         , interests = lessThanEqLength 2
         , age       = greaterThan 0
         }
 
-runValidations :: UserB Validator -> User -> UserB (Either [Error])
-runValidations = bzipWith runValidator'
+validate :: (ProductB b) => b Identity -> b Validator -> b (Validation [Error])
+validate = bzipWith (runValidator . runIdentity)
+
+infixl 9 !>
+(!>) :: (ProductB b) => b Identity -> b Validator -> b (Validation [Error])
+(!>) = validate
+
+validated :: UserB (Validation [Error])
+validated = testUser !> userValidations %> normalizeUser
+
+withFieldNames :: UserB (Validation [Error]) -> UserB (Validation [Error])
+withFieldNames b = bzipWith addName userFieldNames b
   where
-    runValidator' v (Identity a) = runValidator v a
+    addName :: Const String a -> Validation [Error] a -> Validation [Error] a
+    addName (Const name) = first (fmap ((name <> ": ") <>))
 
-validated :: UserB (Either [Error])
-validated = runValidations validations testUser
-
-bmapC :: forall c f g b.
-      (AllB c b, ProductBC b)
-      => (forall a. c a => f a -> g a)
-      -> b f
-      -> b g
-bmapC f = bzipWith withDict bdicts
-  where
-    withDict :: forall a. Dict c a -> f a -> g a
-    withDict d fa = requiringDict (f fa) d
-
-testUser :: User
+testUser :: UserB Identity
 testUser =
   UserB { userId    = pure "a"
         , country   = pure "CasdfA"
@@ -108,23 +97,24 @@ userDefaults =
         , age       = Nothing
         }
 
-jsonMaybe :: FromJSON a => Value -> Maybe a
-jsonMaybe x = case fromJSON x of
-  Success a -> Just a
-  Error _   -> Nothing
+jsonMaybe :: A.FromJSON a => A.Value -> Maybe a
+jsonMaybe x = case A.fromJSON x of
+  A.Success a -> Just a
+  A.Error _   -> Nothing
 
 userFieldNames :: UserB (Const String)
-userFieldNames =
+userFieldNames = 
   UserB { userId    = "user_id"
         , country   = "country"
         , interests = "interests"
         , age       = "age"
         }
 
-userFromMap :: M.Map String Value -> UserB Maybe
-userFromMap m = bmapC @FromJSON lookupVal userFieldNames
+
+userFromMap :: M.Map String A.Value -> UserB Maybe
+userFromMap m = bmapC @A.FromJSON lookupVal userFieldNames
   where
-    lookupVal :: FromJSON a => Const String a -> Maybe a
+    lookupVal :: A.FromJSON a => Const String a -> Maybe a
     lookupVal (Const k) = M.lookup k m >>= jsonMaybe
 
 printErrors :: UserB (Either [Error]) -> [Error]

@@ -36,8 +36,13 @@ packages:
 - .
 # Dependency packages to be pulled from upstream that are not in the resolver
 # using the same syntax as the packages field.
-# (e.g., acme-missiles-0.3)
-# extra-deps: []
+# (e.gk, acme-missiles-0.3)
+extra-deps:
+- ../barbies
+- do-notation-0.1.0.2@sha256:04cd62b59fcb30bfc2fce72002cba54655c38348ef167a7c99f029225f85838f
+- indexed-0.1.3@sha256:5f3190a3b57455a7247b330cfec4d44ec5ebff7c0d957a94a4e505ccaa607917
+- indexed-extras-0.2@sha256:e7e498023e33016fe45467dfee3c1379862e7e6654a806a965958fa1adc00304
+# - barbies-1.1.1.0
 
 # Override default flag values for local packages and extra-deps
 # flags: {}

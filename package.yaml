@@ -33,6 +33,12 @@ dependencies:
 - bifunctors
 - invariant
 - containers
+- bytestring
+- either
+- profunctors
+- do-notation
+- indexed
+- indexed-extras
 
 library:
   source-dirs: src
