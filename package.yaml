@@ -39,6 +39,10 @@ dependencies:
 - do-notation
 - indexed
 - indexed-extras
+- wai
+- bytestring
+- text
+- http-types
 
 library:
   source-dirs: src
