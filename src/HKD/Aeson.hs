@@ -20,6 +20,7 @@ jsonKeys :: UserB (Const T.Text)
 jsonKeys =
   UserB { userId    = Const "user_id"
         , country   = Const "country"
+        , state     = Const "state"
         , interests = Const "interests"
         , age       = Const "age"
         }

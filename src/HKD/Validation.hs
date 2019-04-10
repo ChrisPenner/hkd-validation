@@ -6,13 +6,14 @@ module HKD.Validation where
 
 import           Control.Lens
 
-import qualified Data.Aeson              as A
+import qualified Data.Aeson             as A
 import           Data.Barbie
 import           Data.Either
 import           Data.Either.Validation
-import qualified Data.Map                as M
-import Data.Bifunctor
-import HKD.Transformer
+import qualified Data.Map               as M
+import           Data.Bifunctor
+import           HKD.Transformer
+import           Control.Arrow hiding (first)
 
 import           HKD.User
 
@@ -54,16 +55,52 @@ runValidator  a (Validator f) =
     []   -> Success a
     errs -> Failure errs
 
-newtype Validator a = Validator (a -> [String])
+newtype Validator a = Validator {runV :: a -> [String] }
     deriving newtype (Semigroup, Monoid)
+
+type CrossValidator b f = Kleisli Validator (b f)
+
+-- Allows higher order validations which depend on other fields
+-- E.g. a state must match the country field
+crossValidate :: forall b. (ProductB b, FunctorB b)
+              => b (CrossValidator b Identity)
+              -> b Identity
+              -> b (Validation [Error])
+crossValidate v b = validate b validators
+  where
+    validators :: b Validator
+    validators = bmap (\(Kleisli f) -> f b) v
+
+using :: (b Identity -> Identity x) -> (x -> Validator r) -> CrossValidator b Identity r
+using getter v = Kleisli (v . runIdentity . getter)
+
+isolated :: Validator a -> CrossValidator UserB Identity a
+isolated = Kleisli . const
 
 userValidations :: UserB Validator
 userValidations =
   UserB { userId    = atLeastLength 3 <> lessThanEqLength 10
         , country   = inList countryCodes
+        , state     = mempty
         , interests = lessThanEqLength 2
         , age       = greaterThan 0
         }
+
+stateList :: String -> [String]
+stateList "CA" = ["SK", "AB", "ON"]
+stateList "US" = ["DC", "AZ", "CA", "AB"]
+stateList _ = []
+
+
+higherOrderValidations :: UserB (CrossValidator UserB Identity)
+higherOrderValidations =
+  UserB { userId    = isolated $ atLeastLength 3 <> lessThanEqLength 10
+        , country   = isolated $ inList countryCodes
+        , state     = using country   $ \c -> inList (stateList c)
+        , interests = isolated $ lessThanEqLength 2
+        , age       = isolated $ greaterThan 0
+        }
+
 
 validate :: (ProductB b) => b Identity -> b Validator -> b (Validation [Error])
 validate = bzipWith (runValidator . runIdentity)
@@ -85,6 +122,7 @@ testUser :: UserB Identity
 testUser =
   UserB { userId    = pure "a"
         , country   = pure "CasdfA"
+        , state     = pure "AB"
         , interests = pure ["dogs"]
         , age       = pure 32
         }
@@ -93,6 +131,7 @@ userDefaults :: UserB Maybe
 userDefaults =
   UserB { userId    = Nothing
         , country   = pure "US"
+        , state     = pure "AB"
         , interests = pure ["food"]
         , age       = Nothing
         }
@@ -103,9 +142,10 @@ jsonMaybe x = case A.fromJSON x of
   A.Error _   -> Nothing
 
 userFieldNames :: UserB (Const String)
-userFieldNames = 
+userFieldNames =
   UserB { userId    = "user_id"
         , country   = "country"
+        , state     = "state"
         , interests = "interests"
         , age       = "age"
         }

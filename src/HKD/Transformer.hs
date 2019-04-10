@@ -16,6 +16,7 @@ normalizeUser :: UserB Endo
 normalizeUser =
   UserB { userId    = upperCase
         , country   = strip
+        , state     = strip
         , interests = mempty
         , age       = mempty
         }

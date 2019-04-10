@@ -33,6 +33,7 @@ dependencies:
 - bifunctors
 - invariant
 - containers
+- comonad
 - bytestring
 - either
 - profunctors
@@ -43,6 +44,7 @@ dependencies:
 - bytestring
 - text
 - http-types
+- generic-lens
 
 library:
   source-dirs: src

@@ -11,6 +11,7 @@ import Data.Functor.Identity
 data UserB f =
   UserB { userId    :: f String
         , country   :: f String
+        , state     :: f String
         , interests :: f [String]
         , age       :: f Int
         }
