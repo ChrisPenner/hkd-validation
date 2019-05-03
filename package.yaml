@@ -45,6 +45,7 @@ dependencies:
 - text
 - http-types
 - generic-lens
+- optparse-applicative
 
 library:
   source-dirs: src
