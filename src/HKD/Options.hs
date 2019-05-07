@@ -1,40 +1,40 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 module HKD.Options where
 
-import Options.Applicative hiding (Failure, Success)
-import Data.Semigroup ((<>))
-import Data.Functor.Identity
-import Data.Functor.Compose
-import Data.Barbie
-import System.Environment
+import System.Environment (lookupEnv, setEnv)
+import Text.Read (readMaybe)
+import Data.Functor.Compose (Compose(..))
 import GHC.Generics (Generic)
-import Text.Read
 import qualified Data.Aeson as A
-import Data.Aeson.Lens
+import Data.Barbie
 import Data.Text.Lens
+import Data.Aeson.Lens
 import Control.Lens
-import Data.Maybe
-import Data.Foldable
 import Data.Either.Validation
+import Data.Foldable
+import Options.Applicative hiding (Failure, Success)
 
-type Options = OptionsF Identity
+type Options = Options_ Identity
 
-data OptionsF f =
-    OptionsF
+data Options_ f =
+    Options_
     { serverHost :: f String
     , numThreads :: f Int
     , verbosity  :: f Int
     }
     deriving (Generic, FunctorB, TraversableB, ProductB, ConstraintsB, ProductBC)
 
-deriving instance (AllBF Show f OptionsF) => Show (OptionsF f)
-deriving instance (AllBF Eq f OptionsF) => Eq (OptionsF f)
+deriving instance (AllBF Show f Options_) => Show (Options_ f)
+deriving instance (AllBF Eq f Options_) => Eq (Options_ f)
+deriving instance (AllBF A.FromJSON f Options_) => A.FromJSON (Options_ f)
 
-instance (Alternative f) => Semigroup (OptionsF f) where
+instance (Alternative f) => Semigroup (Options_ f) where
   (<>) = bzipWith (<|>)
 
-instance (Alternative f) => Monoid (OptionsF f) where
+instance (Alternative f) => Monoid (Options_ f) where
   mempty = buniq empty
 
 mkOptional :: FunctorB b => b Parser -> b (Parser `Compose` Maybe)
@@ -43,11 +43,11 @@ mkOptional = bmap (Compose . optional)
 toParserInfo :: (TraversableB b) => b (Parser `Compose` Maybe) -> ParserInfo (b Maybe)
 toParserInfo b = info (bsequence b) briefDesc
 
-cliOpts :: OptionsF Parser
-cliOpts =
-    OptionsF
+cliOptsParser :: Options_ Parser
+cliOptsParser =
+    Options_
     { serverHost =
-          strOption (long "hello" <> metavar "TARGET" <> help "Target for the greeting")
+          strOption (long "serverHost" <> metavar "HOST" <> help "host for API interactions")
     , numThreads =
           option auto
                  (long "threads" <> short 't' <> help "number of threads" <> metavar "INT")
@@ -58,74 +58,106 @@ cliOpts =
                            <> metavar "VERBOSITY")
     }
 
-getCliOpts :: IO (OptionsF Maybe)
-getCliOpts = execParser $ toParserInfo (mkOptional cliOpts)
+cliOpts :: IO (Options_ Maybe)
+cliOpts = execParser $ toParserInfo (mkOptional cliOptsParser)
 
 --- Env Opts
 
-lookupEnv' :: Read a => String -> (IO `Compose` Maybe) a
-lookupEnv' envKey = Compose $ do
+readEnv :: Read a => String -> (IO `Compose` Maybe) a
+readEnv envKey = Compose $ do
     lookupEnv envKey >>= pure . \case
         Just x -> readMaybe x
         Nothing -> Nothing
 
-envOpts :: IO (OptionsF Maybe)
+envOpts :: IO (Options_ Maybe)
 envOpts = bsequence
-    OptionsF
-    { serverHost = lookupEnv' "SERVER_HOST"
-                <|> lookupEnv' "SERVER" -- allow several possible keys
-    , numThreads = lookupEnv' "NUM_THREADS"
-    , verbosity    = Compose (pure empty) -- Don't set verbosity from environment
+    Options_
+    { serverHost = Compose . lookupEnv $ "SERVER_HOST"
+    , numThreads = readEnv "NUM_THREADS"
+    , verbosity    = Compose . pure $ Nothing -- Don't read verbosity from environment
     }
 
 --- File Opts
 
-jsonOpts :: A.Value -> OptionsF Maybe
-jsonOpts = bsequence
-    OptionsF
-    { serverHost = Compose $ preview (key "host" . _String . unpacked)
-    , numThreads = Compose $ preview (key "num_threads" . _Number . to round)
-    , verbosity  = Compose $ preview (key "verbosity" . _Number . to round)
+
+jsonOptsDerived :: (A.FromJSON (b Maybe), ProductB b) => A.Value -> b Maybe
+jsonOptsDerived = fromResult . A.fromJSON
+  where
+    fromResult :: ProductB b => A.Result (b Maybe) -> b Maybe
+    fromResult (A.Success a) = a
+    fromResult (A.Error _) = buniq Nothing
+
+jsonOptsCustom :: A.Value -> Options_ Maybe
+jsonOptsCustom = bsequence
+    Options_
+    { serverHost = findField $ key "host"        . _String . unpacked
+    , numThreads = findField $ key "num_threads" . _Number . to round
+    , verbosity  = findField $ key "verbosity"   . _Number . to round
     }
+      where
+        findField :: Fold A.Value a -> Compose ((->) A.Value) Maybe a
+        findField p = Compose (preview p)
 
-jsonValue :: A.Value
--- jsonValue = A.object ["host" A..= A.String "example.com", "verbosity" A..= A.Number 42]
-jsonValue = A.object []
 
-orDefault :: ProductB b => b Maybe -> b Identity -> b Identity
-orDefault = (bzipWith (flip fromMaybeI))
+readConfigFile :: IO A.Value
+readConfigFile =
+    pure $ A.object [ "host" A..= A.String "example.com"
+                    , "verbosity" A..= A.Number 42
+                    ]
+
+-- readConfigFile = pure $ A.object []
+
+withDefaults :: ProductB b => b Identity -> b Maybe -> b Identity
+withDefaults = bzipWith fromMaybeI
   where
     fromMaybeI :: Identity a -> Maybe a -> Identity a
-    fromMaybeI ia ma = Identity $ fromMaybe (runIdentity ia) ma
+    fromMaybeI (Identity a) Nothing  = Identity a
+    fromMaybeI _            (Just a) = Identity a
 
-optErrors :: OptionsF (Const String)
+optErrors :: Options_ (Const String)
 optErrors =
-    OptionsF
-    { serverHost = "server host not provided but is required"
-    , numThreads = "num threads not provided"
-    , verbosity  = "verbosity not provided"
+    Options_
+    { serverHost = "server host required but not provided"
+    , numThreads = "num threads required but not provided"
+    , verbosity  = "verbosity required but not provided"
     }
 
-getErrs :: (TraversableB b, ProductB b)
-        => b Maybe
-        -> b (Const String)
-        -> Validation [String] (b Identity)
-getErrs mOpts errMsgs = bsequence' $ bzipWith go mOpts errMsgs
+validateOptions :: (TraversableB b, ProductB b)
+                => b (Const String)
+                -> b Maybe
+                -> Validation [String] (b Identity)
+validateOptions errMsgs mOpts = bsequence' $ bzipWith validate mOpts errMsgs
   where
-    go :: Maybe a -> Const String x -> Validation [String] a
-    go (Just x) _ = Success x
-    go Nothing (Const err) = Failure [err]
+    validate :: Maybe a -> Const String a -> Validation [String] a
+    validate (Just x) _ = Success x
+    validate Nothing (Const err) = Failure [err]
 
-defaultOpts :: OptionsF Identity
+defaultOpts :: Options_ Identity
 defaultOpts =
-    OptionsF
+    Options_
     { serverHost = pure "localhost"
     , numThreads = pure 1
     , verbosity  = pure 0
     }
 
+-- getOptionsBad :: IO Options
+-- getOptionsBad = do
+--     configJson <- readConfigFile
+--     mServerHostEnv <- readServerHostEnv
+--     mNumThreadsEnv <- readNumThreadsEnv
+--     let mServerHostJson = configJson ^? key "server_host" . _String . unpacked
+--     let mNumThreadsJson = configJson ^? key "num_threads" . _Number . to round
+--     return $ Options <$> fromMaybe serverHostDef (mServerHostEnv <|> mServerHostJson)
+--                      <*> fromMaybe numThreadsDef (mNumThreadsEnv <|> mNumThreadsJson)
+
+
 getOptions :: IO (Validation [String] Options)
-getOptions = do
-    mOpts <- fold [getCliOpts, envOpts, pure (jsonOpts jsonValue)]
-    return $ getErrs mOpts optErrors
-    -- return $ mOpts `orDefault` defaultOpts
+getOptions =
+  validateOptions optErrors <$> fold [cliOpts, envOpts, jsonOptsCustom <$> readConfigFile]
+
+-- getOptions :: IO (Validation [String] (Options_ Identity))
+-- getOptions = do
+--     setEnv "NUM_THREADS" "1337"
+--     configJson <- readConfigFile
+--     -- withDefaults defaultOpts <$> fold [envOpts, pure (jsonOptsCustom configJson)]
+--     validateOptions optErrors <$> fold [envOpts, pure (jsonOptsCustom configJson)]

@@ -4,9 +4,12 @@
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE UndecidableInstances #-}
 module HKD.Comonad where
 
 import           Control.Comonad
+import           Control.Comonad.Store
 import           Control.Lens
 import           Data.Barbie
 import           HKD.User
@@ -16,6 +19,7 @@ import           Data.Kind
 import           Data.Generics.Product
 import           GHC.TypeLits
 import           GHC.Generics
+import           Data.Type.Equality
 
 
 bextract :: (FunctorB b, Comonad w) => b w -> b Identity
@@ -38,30 +42,17 @@ userFix =
           , age       = Kleisli $ Identity . const 37
           }
 
-dependantValidate :: (FunctorB b)
-                  => b Identity
-                  -> b (Kleisli (Validation String) (b Identity))
-                  -> b (Validation String)
-dependantValidate b v = bmap (\(Kleisli f) -> f b) v
+userStore :: Store User String
+userStore = store (extract . getField @"userId") simpleUser
 
+selectField :: forall field s b w a. (HasField' field s b, ComonadStore s w) => w a -> b
+selectField = getField @field . pos
 
-type family AllC (c :: k -> Constraint) (xs :: [k]) :: Constraint where
-  AllC _ '[] = ()
-  AllC c (x:xs) = (c x, AllC c xs)
+selectType :: forall s b w a. (HasType b s, ComonadStore s w) => w a -> b
+selectType = getTyped @b . pos
 
-class WanderingComonad w (t :: [Symbol]) | w -> t where
-    focusField :: forall (s :: Symbol) a x. HasField' s (w x) a => w x -> w a
-
-
-data MyType = MyType { str :: String
-                     , int :: Int
-                     }
-
-newtype FieldFocus r (s :: Symbol) = FF {runFocus :: r}
-    deriving Generic
-
-extractField :: forall s r a. HasField' s r a => FieldFocus r s -> a
-extractField (FF r) = getField @s r
+selectAcc :: ComonadStore s w => (s -> b) -> w a -> b
+selectAcc f = f . pos
 
 -- extendField :: forall s r a. HasField' s r a => (forall s' a'. HasField' s' r a' => FieldFocus r s' -> a') -> FieldFocus r s -> FieldFocus r s
 -- extendField f (FF r) = undefined

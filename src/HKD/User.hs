@@ -6,7 +6,7 @@ import Data.Barbie
 import GHC.Generics
 import Data.Functor.Identity
 
--- type User = UserB Bare Identity
+type User = UserB Identity
 
 data UserB f =
   UserB { userId    :: f String
@@ -19,7 +19,13 @@ data UserB f =
 
 deriving instance (forall a. Show a => Show (f a)) => Show (UserB f)
 
+simpleUser :: User
+simpleUser =
+    UserB
+    { userId    = pure "USER-1234"
+    , country   = pure "CA"
+    , state     = pure "AB"
+    , interests = pure ["dogs"]
+    , age       = pure 32
+    }
 
-type family AutoStrip f a where
-  AutoStrip Identity a = a
-  AutoStrip f a = f a
